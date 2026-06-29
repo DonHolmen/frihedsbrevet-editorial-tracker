@@ -92,18 +92,21 @@ choices, explained in §3 — surfaced here rather than hidden.
 - **Graceful degradation:** with no Upstash credentials the app runs fully — realtime simply
   no-ops and the board works locally. *Why:* a realtime outage must never break core CRUD or
   fail a write (the broadcast hook is best-effort).
-- **Card locks across two surfaces.** A card can't be grabbed by two people at once: while
-  someone drags a card, every other board shows it 🔒 "[name] is moving" and disables dragging
-  (live over realtime, Redis-backed so newcomers see in-flight drags, with a server-side 409
-  conflict guard). The board **also mirrors Payload's native admin document locks** — when
-  someone opens a post in `/admin`, that card shows 🔒 "[name] is editing" on every board.
-  *Why:* prevents two people clobbering the same item; *shows:* I can build one coherent lock
-  spanning two independent systems (custom realtime drag-locks + Payload's internal
-  `payload-locked-documents`).
+- **One enforced lock across board + admin.** A custom Redis-backed lock (broadcast live over
+  realtime) is shared by both surfaces: dragging a card on the board takes a `drag` lock, and
+  opening a post in `/admin` takes an `admin` lock (via the `AdminEditLock` UI field on the edit
+  form). While locked, every open board shows the card 🔒 "[name] is moving/editing" and won't
+  drag it; the lock can't be stolen (409) or released by anyone but the holder; and — crucially
+  — a `beforeChange` hook (`enforceEditLock`) **hard-rejects any save by another user (HTTP
+  423)**. So a second person can open a post read-only but cannot clobber it from the board, the
+  admin, or the REST/GraphQL API. *Why:* true mutual exclusion, not just a hint; *shows:* I
+  built one coherent, enforced lock spanning two independent surfaces rather than leaning on
+  Payload's takeover-able built-in lock (which is disabled here for exactly that reason).
 
 ### Concurrency, UX & DX
 
-- **Document locking** (Payload `lockDocuments`, 5 min) for concurrent admin edits.
+- **Concurrent-edit safety** via the enforced lock above (replacing Payload's takeover-able
+  built-in `lockDocuments`, which is turned off for this collection).
 - **Deadline urgency badges** (`DeadlineBadge.tsx`): red/amber/green by time-to-deadline so
   overdue work is obvious at a glance.
 - **TypeScript strict end-to-end** + Payload-generated types + an isomorphic Zod event schema
@@ -133,9 +136,8 @@ These are conscious choices given the time-box — called out explicitly, as req
   Small, deliberate omission to keep the card clean; trivial to add.
 - **Character-level co-editing (CRDT).** True Google-Docs-style co-editing of the body via
   Yjs + a sync server was considered and **documented as a stretch goal, not built.** Instead
-  the build ships a *race-safe slice*: drag-locks plus a live mirror of Payload's native
-  document locking (§2). *Why:* a correct CRDT setup is days, not hours, and out of proportion
-  to the brief.
+  the build ships a *race-safe slice*: one enforced edit lock across the board and admin (§2).
+  *Why:* a correct CRDT setup is days, not hours, and out of proportion to the brief.
 - **Docker.** Not included — SQLite makes the app zero-infra (`pnpm install && pnpm dev`), so
   Docker adds little for local review. A `Dockerfile` + compose is straightforward to add.
 - **Automated tests.** None in this slice. *Why:* time-boxed toward demonstrating breadth.

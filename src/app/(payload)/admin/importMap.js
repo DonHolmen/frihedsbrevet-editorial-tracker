@@ -1,3 +1,4 @@
+import { AdminEditLock as AdminEditLock_1d9cfaf55a06446d0ebe1e1737203093 } from '@/components/admin/AdminEditLock'
 import { DeadlineCell as DeadlineCell_7aa8132bf8e068d8553624ab95212aeb } from '@/components/admin/DeadlineCell'
 import { RscEntryLexicalCell as RscEntryLexicalCell_44fe37237e0ebf4470c9990d8cb7b07e } from '@payloadcms/richtext-lexical/rsc'
 import { RscEntryLexicalField as RscEntryLexicalField_44fe37237e0ebf4470c9990d8cb7b07e } from '@payloadcms/richtext-lexical/rsc'
@@ -26,6 +27,7 @@ import { CollectionCards as CollectionCards_f9c02e79a4aed9a3924487c0cd4cafb1 } f
 
 /** @type import('payload').ImportMap */
 export const importMap = {
+  "@/components/admin/AdminEditLock#AdminEditLock": AdminEditLock_1d9cfaf55a06446d0ebe1e1737203093,
   "@/components/admin/DeadlineCell#DeadlineCell": DeadlineCell_7aa8132bf8e068d8553624ab95212aeb,
   "@payloadcms/richtext-lexical/rsc#RscEntryLexicalCell": RscEntryLexicalCell_44fe37237e0ebf4470c9990d8cb7b07e,
   "@payloadcms/richtext-lexical/rsc#RscEntryLexicalField": RscEntryLexicalField_44fe37237e0ebf4470c9990d8cb7b07e,

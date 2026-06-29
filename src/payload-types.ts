@@ -216,15 +216,10 @@ export interface PayloadKv {
  */
 export interface PayloadLockedDocument {
   id: number;
-  document?:
-    | ({
-        relationTo: 'users';
-        value: number | User;
-      } | null)
-    | ({
-        relationTo: 'content-items';
-        value: number | ContentItem;
-      } | null);
+  document?: {
+    relationTo: 'users';
+    value: number | User;
+  } | null;
   globalSlug?: string | null;
   user: {
     relationTo: 'users';

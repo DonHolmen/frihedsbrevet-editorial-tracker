@@ -23,8 +23,13 @@ export const boardSchema = {
     deleted: z.object({ id }),
     /** Authoritative roster of everyone currently on the board. */
     presence: z.array(z.object({ id, name: z.string() })),
-    /** Cards currently being dragged (drag-locks) — live so others can't grab them. */
-    locks: z.array(z.object({ itemId: id, by: z.object({ id, name: z.string() }) })),
+    /**
+     * Cards currently locked — `drag` (being moved on the board) or `admin`
+     * (open in the Payload edit view). Live so no one else can grab them.
+     */
+    locks: z.array(
+      z.object({ itemId: id, by: z.object({ id, name: z.string() }), kind: z.enum(['drag', 'admin']) }),
+    ),
   },
 }
 

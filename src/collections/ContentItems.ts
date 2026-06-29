@@ -10,14 +10,16 @@ import {
   canUpdateContentItems,
 } from '../access/contentItems'
 import { broadcastChange, broadcastDelete } from '../hooks/broadcastChange'
+import { enforceEditLock } from '../hooks/enforceEditLock'
 import { enforceStatusStateMachine } from '../hooks/enforceStatusStateMachine'
 import { stampAudit } from '../hooks/stampAudit'
 
 export const ContentItems: CollectionConfig = {
   slug: 'content-items',
-  // Leverage Payload's built-in concurrent-edit guard in the admin UI: a doc
-  // being edited is locked (with takeover) for other users for `duration` secs.
-  lockDocuments: { duration: 300 },
+  // Disable Payload's built-in lock (it allows takeover, which contradicts our
+  // hard lock). Concurrent-edit safety is handled by our own enforced lock:
+  // AdminEditLock (admin) + drag-locks (board) + the enforceEditLock hook.
+  lockDocuments: false,
   admin: {
     useAsTitle: 'title',
     defaultColumns: ['title', 'status', 'type', 'deadline', 'updatedBy'],
@@ -30,8 +32,9 @@ export const ContentItems: CollectionConfig = {
     delete: canDeleteContentItems,
   },
   hooks: {
-    // Order matters: guard the transition first, then stamp the audit trail.
-    beforeChange: [enforceStatusStateMachine, stampAudit],
+    // Order matters: reject if locked by someone else, then guard the
+    // transition, then stamp the audit trail.
+    beforeChange: [enforceEditLock, enforceStatusStateMachine, stampAudit],
     afterChange: [broadcastChange],
     afterDelete: [broadcastDelete],
   },
@@ -40,6 +43,13 @@ export const ContentItems: CollectionConfig = {
       name: 'title',
       type: 'text',
       required: true,
+    },
+    {
+      // Acquires our shared edit-lock while this post is open in the admin, so
+      // the board locks the card live (see src/components/admin/AdminEditLock).
+      name: 'editLock',
+      type: 'ui',
+      admin: { components: { Field: '@/components/admin/AdminEditLock#AdminEditLock' } },
     },
     {
       name: 'status',

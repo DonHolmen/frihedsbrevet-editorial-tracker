@@ -20,7 +20,7 @@ type Item = {
 
 type CurrentUser = { id: string | number; name: string; role: string }
 
-type Lock = { id: string | number; name: string }
+type Lock = { id: string | number; name: string; kind: 'drag' | 'admin' }
 
 const COLUMNS: { key: Status; label: string }[] = [
   { key: 'idea', label: 'Idea' },
@@ -34,7 +34,7 @@ const TERMINAL: Status[] = ['published', 'archived']
 /** Turn a lock array into an itemId → holder map. */
 const toLockMap = (locks: BoardLock[]): Record<string, Lock> => {
   const m: Record<string, Lock> = {}
-  for (const l of locks) m[String(l.itemId)] = l.by
+  for (const l of locks) m[String(l.itemId)] = { id: l.by.id, name: l.by.name, kind: l.kind }
   return m
 }
 
@@ -49,10 +49,8 @@ export function KanbanBoard({
   const [present, setPresent] = useState<Record<string, { name: string }>>({})
   const [toast, setToast] = useState<string | null>(null)
   const [dragId, setDragId] = useState<string | number | null>(null)
-  // Lock sources: `dragLocks` = a card being dragged right now (live via realtime
-  // + poll); `adminLocks` = a doc open in /admin (mirrored from Payload, polled).
-  const [dragLocks, setDragLocks] = useState<Record<string, Lock>>({})
-  const [adminLocks, setAdminLocks] = useState<Record<string, Lock>>({})
+  // One shared lock set (drag + admin), live via realtime, polled as a fallback.
+  const [locks, setLocks] = useState<Record<string, Lock>>({})
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragRef = useRef<string | number | null>(null)
 
@@ -66,14 +64,11 @@ export function KanbanBoard({
   // lock; null if it's free or the lock is my own.
   const lockedBy = useCallback(
     (itemId: string | number): { name: string; kind: 'drag' | 'admin' } | null => {
-      const key = String(itemId)
-      const d = dragLocks[key]
-      if (d && String(d.id) !== String(currentUser.id)) return { name: d.name, kind: 'drag' }
-      const a = adminLocks[key]
-      if (a && String(a.id) !== String(currentUser.id)) return { name: a.name, kind: 'admin' }
+      const v = locks[String(itemId)]
+      if (v && String(v.id) !== String(currentUser.id)) return { name: v.name, kind: v.kind }
       return null
     },
-    [dragLocks, adminLocks, currentUser.id],
+    [locks, currentUser.id],
   )
 
   const seedPresence = useCallback(
@@ -103,8 +98,8 @@ export function KanbanBoard({
         // Authoritative roster — replace local state wholesale.
         seedPresence(data)
       } else if (event === 'board.locks') {
-        // Authoritative drag-locks — replace local state wholesale.
-        setDragLocks(toLockMap(data))
+        // Authoritative lock set (drag + admin) — replace wholesale.
+        setLocks(toLockMap(data))
       }
     },
   })
@@ -156,17 +151,15 @@ export function KanbanBoard({
     let active = true
     const refresh = () =>
       fetch('/locks', { credentials: 'same-origin' })
-        .then((r) => (r.ok ? (r.json() as Promise<{ drag?: BoardLock[]; admin?: BoardLock[] }>) : null))
+        .then((r) => (r.ok ? (r.json() as Promise<{ locks?: BoardLock[] }>) : null))
         .then((res) => {
-          if (!active || !res) return
-          if (res.drag) setDragLocks(toLockMap(res.drag))
-          if (res.admin) setAdminLocks(toLockMap(res.admin))
+          if (active && res?.locks) setLocks(toLockMap(res.locks))
         })
         .catch(() => {})
 
     void refresh()
-    // Admin locks aren't broadcast (Payload owns them), so poll to pick them up.
-    const poll = setInterval(refresh, 6_000)
+    // Realtime keeps this live; the poll is just a reconnect/safety fallback.
+    const poll = setInterval(refresh, 10_000)
     return () => {
       active = false
       clearInterval(poll)
@@ -194,7 +187,7 @@ export function KanbanBoard({
       setDragId(item.id)
       void postLock(item.id, true)
         .then((r) => (r.ok ? r.json() : null))
-        .then((res) => res?.drag && setDragLocks(toLockMap(res.drag)))
+        .then((res) => res?.locks && setLocks(toLockMap(res.locks)))
         .catch(() => {})
     },
     [postLock],
@@ -205,7 +198,7 @@ export function KanbanBoard({
       setDragId(null)
       void postLock(itemId, false)
         .then((r) => (r.ok ? r.json() : null))
-        .then((res) => res?.drag && setDragLocks(toLockMap(res.drag)))
+        .then((res) => res?.locks && setLocks(toLockMap(res.locks)))
         .catch(() => {})
     },
     [postLock],
@@ -287,7 +280,13 @@ export function KanbanBoard({
             key={col.key}
             onDragOver={(e) => e.preventDefault()}
             onDrop={() => {
-              if (dragId != null) void move(dragId, col.key)
+              const id = dragId
+              if (id != null) {
+                void move(id, col.key)
+                // Release here too: the optimistic re-render can unmount the card
+                // before its onDragEnd fires, which would otherwise strand the lock.
+                endDrag(id)
+              }
             }}
             className="flex min-h-[60vh] flex-col rounded-xl bg-slate-200/60 p-3"
           >

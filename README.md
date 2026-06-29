@@ -80,7 +80,7 @@ board updates locally only. Emitted events are visible live in the Upstash conso
 | Realtime SDK (emit + schema + Redis) | `src/lib/realtime.ts`, `src/lib/realtime-schema.ts`, `src/lib/redis.ts` |
 | Realtime SSE route + presence | `src/app/realtime/route.ts`, `src/app/presence/route.ts`, `src/lib/presence.ts` |
 | Realtime broadcast hooks | `src/hooks/broadcastChange.ts` (afterChange + afterDelete) |
-| Card locks (drag-lock + admin mirror) | `src/app/locks/route.ts`, `src/lib/locks.ts` |
+| Card locks (drag + admin, enforced) | `src/lib/locks.ts`, `src/app/locks/route.ts`, `src/hooks/enforceEditLock.ts`, `src/components/admin/AdminEditLock.tsx` |
 | Board (Local API + RBAC) | `src/app/(frontend)/board/page.tsx`, `src/components/KanbanBoard.tsx` |
 | Deadlines at a glance | `src/components/DeadlineBadge.tsx` (+ optional `src/components/admin/DeadlineCell.tsx`) |
 | Seed | `src/seed/seed.ts` |
@@ -92,8 +92,9 @@ board updates locally only. Emitted events are visible live in the Upstash conso
 3. As Erik, drag it to **Published** → succeeds and appears live on Clara's board.
 4. As Erik, start dragging a card → Clara instantly sees it 🔒 *"Erik is moving"* and can't
    drag it; on drop the lock clears and the move appears live on her board.
-5. Open that same item in **/admin** → within a few seconds the board shows it 🔒 *"… is
-   editing"* and locked for everyone until the admin view is closed.
+5. As Erik, open a post in **/admin** → its card locks 🔒 *"Erik is editing"* on Clara's board;
+   if Clara opens the same post she gets a read-only banner and her save is rejected (HTTP 423)
+   until Erik closes it.
 6. Note *Budgetlækage* shows a red **Overdue** badge.
 7. Open any item in `/admin` → see the `auditLog` array + `updatedBy`.
 8. As Erik, toggle `isArchived` on an item → it leaves the board for everyone.
@@ -102,6 +103,6 @@ board updates locally only. Emitted events are visible live in the Upstash conso
 
 True *character-level* co-editing of the Lexical body via Yjs CRDT + a sync server
 (Hocuspocus / y-websocket) with the awareness protocol for live cursors. The current build
-ships a race-safe slice instead: **drag-locks** (a 🔒 indicator while a card is being moved,
-released on drop) plus a live **mirror of Payload's native `lockDocuments`** so a post open in
-`/admin` shows locked on the board.
+ships a race-safe slice instead: **one enforced edit lock** shared by the board (drag-locks)
+and the admin (a post open in `/admin` locks the card live), where a second editor is held to
+read-only — saves by a non-holder are rejected server-side (HTTP 423).
