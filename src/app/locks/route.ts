@@ -2,20 +2,18 @@ import config from '@payload-config'
 import { headers as nextHeaders } from 'next/headers'
 import { getPayload, type Payload } from 'payload'
 
-import { lockHolder, readEditing, startEditing, stopEditing } from '@/lib/editing'
-import { emitEditing } from '@/lib/realtime'
+import { acquireDragLock, dragLockHolder, readDragLocks, releaseDragLock } from '@/lib/locks'
+import { emitLocks } from '@/lib/realtime'
 import type { BoardLock } from '@/lib/realtime-schema'
 
 /**
- * Edit-lock signaling for the board.
+ * Card-lock signaling for the board. Two lock sources are surfaced here:
+ *   • drag-locks  — someone is dragging a card right now (Redis, broadcast live)
+ *   • admin locks — someone has the doc open in /admin (Payload's native
+ *                   `payload-locked-documents`, mirrored read-only)
  *
- * Two lock sources are surfaced here:
- *   • board soft-locks — someone editing a card inline (Redis, broadcast live)
- *   • admin locks       — someone has the doc open in /admin (Payload's native
- *                         `payload-locked-documents`, mirrored read-only)
- *
- * GET  → { board, admin } so a board can seed + poll the full lock state.
- * POST → { itemId, active } to acquire/refresh (active:true) or release a soft-lock.
+ * GET  → { drag, admin } so a board can seed + poll the full lock state.
+ * POST → { itemId, active } to acquire (active:true) / release a drag-lock.
  */
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -55,8 +53,8 @@ export async function GET(): Promise<Response> {
   const { user } = await payload.auth({ headers: await nextHeaders() })
   if (!user) return Response.json({ error: 'unauthorized' }, { status: 401 })
 
-  const [board, admin] = await Promise.all([readEditing(), readAdminLocks(payload)])
-  return Response.json({ board, admin })
+  const [drag, admin] = await Promise.all([readDragLocks(), readAdminLocks(payload)])
+  return Response.json({ drag, admin })
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -75,17 +73,17 @@ export async function POST(req: Request): Promise<Response> {
   const me = { id: user.id, name: (user as { name?: string }).name ?? user.email ?? 'Someone' }
 
   if (body.active) {
-    // Don't let two people grab the same card.
-    const holder = await lockHolder(body.itemId)
+    // Don't let two people drag the same card at once.
+    const holder = await dragLockHolder(body.itemId)
     if (holder && String(holder.id) !== String(user.id)) {
-      return Response.json({ error: 'locked', by: holder, board: await readEditing() }, { status: 409 })
+      return Response.json({ error: 'locked', by: holder, drag: await readDragLocks() }, { status: 409 })
     }
-    const board = await startEditing(body.itemId, me)
-    await emitEditing(board)
-    return Response.json({ board })
+    const drag = await acquireDragLock(body.itemId, me)
+    await emitLocks(drag)
+    return Response.json({ drag })
   }
 
-  const board = await stopEditing(body.itemId)
-  await emitEditing(board)
-  return Response.json({ board })
+  const drag = await releaseDragLock(body.itemId)
+  await emitLocks(drag)
+  return Response.json({ drag })
 }

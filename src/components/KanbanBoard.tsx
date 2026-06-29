@@ -20,6 +20,8 @@ type Item = {
 
 type CurrentUser = { id: string | number; name: string; role: string }
 
+type Lock = { id: string | number; name: string }
+
 const COLUMNS: { key: Status; label: string }[] = [
   { key: 'idea', label: 'Idea' },
   { key: 'draft', label: 'Draft' },
@@ -29,9 +31,9 @@ const COLUMNS: { key: Status; label: string }[] = [
 
 const TERMINAL: Status[] = ['published', 'archived']
 
-/** Turn a lock array into an itemId → editor map. */
-const toLockMap = (locks: BoardLock[]): Record<string, { id: string | number; name: string }> => {
-  const m: Record<string, { id: string | number; name: string }> = {}
+/** Turn a lock array into an itemId → holder map. */
+const toLockMap = (locks: BoardLock[]): Record<string, Lock> => {
+  const m: Record<string, Lock> = {}
   for (const l of locks) m[String(l.itemId)] = l.by
   return m
 }
@@ -47,15 +49,12 @@ export function KanbanBoard({
   const [present, setPresent] = useState<Record<string, { name: string }>>({})
   const [toast, setToast] = useState<string | null>(null)
   const [dragId, setDragId] = useState<string | number | null>(null)
-  // Edit locks: who is editing each card. `boardLocks` = inline board edits
-  // (live via realtime + poll); `adminLocks` = docs open in /admin (polled).
-  const [boardLocks, setBoardLocks] = useState<Record<string, { id: string | number; name: string }>>({})
-  const [adminLocks, setAdminLocks] = useState<Record<string, { id: string | number; name: string }>>({})
-  const [editingId, setEditingId] = useState<string | number | null>(null)
-  const [draftTitle, setDraftTitle] = useState('')
+  // Lock sources: `dragLocks` = a card being dragged right now (live via realtime
+  // + poll); `adminLocks` = a doc open in /admin (mirrored from Payload, polled).
+  const [dragLocks, setDragLocks] = useState<Record<string, Lock>>({})
+  const [adminLocks, setAdminLocks] = useState<Record<string, Lock>>({})
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const editBeat = useRef<ReturnType<typeof setInterval> | null>(null)
-  const editingRef = useRef<string | number | null>(null)
+  const dragRef = useRef<string | number | null>(null)
 
   const flash = useCallback((msg: string) => {
     setToast(msg)
@@ -63,21 +62,20 @@ export function KanbanBoard({
     toastTimer.current = setTimeout(() => setToast(null), 3500)
   }, [])
 
-  // Who is locking `itemId` for me (board soft-lock beats admin lock); null if
-  // it's free or the lock is my own.
+  // Who is locking `itemId` for me, and why. A live drag-lock wins over an admin
+  // lock; null if it's free or the lock is my own.
   const lockedBy = useCallback(
-    (itemId: string | number): { name: string } | null => {
+    (itemId: string | number): { name: string; kind: 'drag' | 'admin' } | null => {
       const key = String(itemId)
-      const b = boardLocks[key]
-      if (b && String(b.id) !== String(currentUser.id)) return b
+      const d = dragLocks[key]
+      if (d && String(d.id) !== String(currentUser.id)) return { name: d.name, kind: 'drag' }
       const a = adminLocks[key]
-      if (a && String(a.id) !== String(currentUser.id)) return a
+      if (a && String(a.id) !== String(currentUser.id)) return { name: a.name, kind: 'admin' }
       return null
     },
-    [boardLocks, adminLocks, currentUser.id],
+    [dragLocks, adminLocks, currentUser.id],
   )
 
-  // ---- Realtime: typed subscription via the Upstash Realtime SDK ----------
   const seedPresence = useCallback(
     (roster: PresentUser[]) => {
       const next: Record<string, { name: string }> = {}
@@ -89,8 +87,9 @@ export function KanbanBoard({
     [currentUser.id],
   )
 
+  // ---- Realtime: typed subscription via the Upstash Realtime SDK ----------
   useRealtime({
-    events: ['board.item', 'board.deleted', 'board.presence', 'board.editing'],
+    events: ['board.item', 'board.deleted', 'board.presence', 'board.locks'],
     onData({ event, data }) {
       if (event === 'board.item') {
         setItems((prev) => {
@@ -103,9 +102,9 @@ export function KanbanBoard({
       } else if (event === 'board.presence') {
         // Authoritative roster — replace local state wholesale.
         seedPresence(data)
-      } else if (event === 'board.editing') {
-        // Authoritative board soft-locks — replace local state wholesale.
-        setBoardLocks(toLockMap(data))
+      } else if (event === 'board.locks') {
+        // Authoritative drag-locks — replace local state wholesale.
+        setDragLocks(toLockMap(data))
       }
     },
   })
@@ -124,8 +123,6 @@ export function KanbanBoard({
         .then((r) => (r.ok ? (r.json() as Promise<{ roster?: PresentUser[] }>) : null))
         .catch(() => null)
 
-    // Join, then seed our roster so we immediately see who's already here
-    // (the live broadcast only covers people who join *after* us).
     void post('join').then((res) => {
       if (active && res?.roster) seedPresence(res.roster)
     })
@@ -142,9 +139,10 @@ export function KanbanBoard({
     }
   }, [seedPresence])
 
-  const postEdit = useCallback(
+  // ---- Locks: POST helper + seed/poll merged lock state (drag + admin) -----
+  const postLock = useCallback(
     (itemId: string | number, isActive: boolean) =>
-      fetch('/editing', {
+      fetch('/locks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
@@ -154,112 +152,63 @@ export function KanbanBoard({
     [],
   )
 
-  // ---- Edit locks: seed + poll merged lock state (board + admin) ----------
   useEffect(() => {
     let active = true
     const refresh = () =>
-      fetch('/editing', { credentials: 'same-origin' })
-        .then((r) => (r.ok ? (r.json() as Promise<{ board?: BoardLock[]; admin?: BoardLock[] }>) : null))
+      fetch('/locks', { credentials: 'same-origin' })
+        .then((r) => (r.ok ? (r.json() as Promise<{ drag?: BoardLock[]; admin?: BoardLock[] }>) : null))
         .then((res) => {
           if (!active || !res) return
-          if (res.board) setBoardLocks(toLockMap(res.board))
+          if (res.drag) setDragLocks(toLockMap(res.drag))
           if (res.admin) setAdminLocks(toLockMap(res.admin))
         })
         .catch(() => {})
 
     void refresh()
-    const poll = setInterval(refresh, 10_000)
+    // Admin locks aren't broadcast (Payload owns them), so poll to pick them up.
+    const poll = setInterval(refresh, 6_000)
     return () => {
       active = false
       clearInterval(poll)
     }
   }, [])
 
-  // Release my lock if I close the tab or unmount mid-edit.
+  // Release my drag-lock if I close the tab or unmount mid-drag.
   useEffect(() => {
-    editingRef.current = editingId
-  }, [editingId])
+    dragRef.current = dragId
+  }, [dragId])
   useEffect(() => {
     const release = () => {
-      if (editingRef.current != null) void postEdit(editingRef.current, false)
+      if (dragRef.current != null) void postLock(dragRef.current, false)
     }
     window.addEventListener('beforeunload', release)
     return () => {
       window.removeEventListener('beforeunload', release)
-      if (editBeat.current) clearInterval(editBeat.current)
       release()
     }
-  }, [postEdit])
+  }, [postLock])
 
-  const stopEditing = useCallback(
-    (itemId: string | number) => {
-      if (editBeat.current) {
-        clearInterval(editBeat.current)
-        editBeat.current = null
-      }
-      setEditingId(null)
-      setDraftTitle('')
-      void postEdit(itemId, false)
+  // ---- Drag lifecycle: lock the card for others while I move it ------------
+  const startDrag = useCallback(
+    (item: Item) => {
+      setDragId(item.id)
+      void postLock(item.id, true)
         .then((r) => (r.ok ? r.json() : null))
-        .then((res) => res?.board && setBoardLocks(toLockMap(res.board)))
+        .then((res) => res?.drag && setDragLocks(toLockMap(res.drag)))
         .catch(() => {})
     },
-    [postEdit],
+    [postLock],
   )
 
-  const startEdit = useCallback(
-    async (item: Item) => {
-      const held = lockedBy(item.id)
-      if (held) {
-        flash(`"${item.title}" is being edited by ${held.name}.`)
-        return
-      }
-      const res = await postEdit(item.id, true).catch(() => null)
-      if (!res) {
-        flash('Network error — could not start editing.')
-        return
-      }
-      const body = await res.json().catch(() => ({}))
-      if (body?.board) setBoardLocks(toLockMap(body.board))
-      if (res.status === 409) {
-        flash(`"${item.title}" was just locked by ${body?.by?.name ?? 'someone'}.`)
-        return
-      }
-      setEditingId(item.id)
-      setDraftTitle(item.title)
-      // Keep the lock alive while the editor is open.
-      editBeat.current = setInterval(() => void postEdit(item.id, true), 8_000)
+  const endDrag = useCallback(
+    (itemId: string | number) => {
+      setDragId(null)
+      void postLock(itemId, false)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((res) => res?.drag && setDragLocks(toLockMap(res.drag)))
+        .catch(() => {})
     },
-    [lockedBy, postEdit, flash],
-  )
-
-  const saveEdit = useCallback(
-    async (item: Item) => {
-      const title = draftTitle.trim()
-      if (!title || title === item.title) {
-        stopEditing(item.id)
-        return
-      }
-      try {
-        const res = await fetch(`/api/content-items/${item.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ title }),
-        })
-        if (!res.ok) {
-          const payload = await res.json().catch(() => ({}))
-          flash(payload?.errors?.[0]?.message ?? `Update failed (${res.status})`)
-          return // keep editing so the user can retry
-        }
-        // success: afterChange broadcast reconciles every board; update ours now
-        setItems((prev) => prev.map((i) => (String(i.id) === String(item.id) ? { ...i, title } : i)))
-        stopEditing(item.id)
-      } catch {
-        flash('Network error — title not saved.')
-      }
-    },
-    [draftTitle, flash, stopEditing],
+    [postLock],
   )
 
   // ---- Move a card: optimistic update -> PATCH -> rollback on failure ----
@@ -339,7 +288,6 @@ export function KanbanBoard({
             onDragOver={(e) => e.preventDefault()}
             onDrop={() => {
               if (dragId != null) void move(dragId, col.key)
-              setDragId(null)
             }}
             className="flex min-h-[60vh] flex-col rounded-xl bg-slate-200/60 p-3"
           >
@@ -353,74 +301,34 @@ export function KanbanBoard({
             <div className="flex flex-1 flex-col gap-2">
               {byStatus[col.key].map((item) => {
                 const lock = lockedBy(item.id)
-                const isEditing = String(editingId) === String(item.id)
-                const draggable = !lock && !isEditing
                 return (
                   <article
                     key={item.id}
-                    draggable={draggable}
-                    onDragStart={() => draggable && setDragId(item.id)}
-                    onDragEnd={() => setDragId(null)}
+                    draggable={!lock}
+                    onDragStart={() => (lock ? undefined : startDrag(item))}
+                    onDragEnd={() => endDrag(item.id)}
                     className={`rounded-lg bg-white p-3 shadow-sm ring-1 transition ${
                       lock
                         ? 'cursor-not-allowed opacity-60 ring-amber-300'
                         : 'cursor-grab ring-slate-200 hover:shadow-md active:cursor-grabbing'
                     }`}
                   >
-                    {isEditing ? (
-                      <div className="flex flex-col gap-2">
-                        <input
-                          autoFocus
-                          value={draftTitle}
-                          onChange={(e) => setDraftTitle(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') void saveEdit(item)
-                            if (e.key === 'Escape') stopEditing(item.id)
-                          }}
-                          className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => void saveEdit(item)}
-                            className="rounded bg-slate-900 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-700"
-                          >
-                            Save
-                          </button>
-                          <button
-                            onClick={() => stopEditing(item.id)}
-                            className="rounded px-2.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-900"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-start justify-between gap-2">
-                          <h3 className="text-sm font-semibold leading-snug text-slate-800">{item.title}</h3>
-                          <DeadlineBadge deadline={item.deadline} />
-                        </div>
-                        <div className="mt-2 flex items-center gap-2">
-                          {item.type && (
-                            <span className="inline-block rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                              {item.type}
-                            </span>
-                          )}
-                          {lock ? (
-                            <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                              🔒 {lock.name} is editing
-                            </span>
-                          ) : (
-                            <button
-                              onClick={() => void startEdit(item)}
-                              className="ml-auto rounded px-2 py-0.5 text-[11px] font-medium text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                            >
-                              ✎ Edit
-                            </button>
-                          )}
-                        </div>
-                      </>
-                    )}
+                    <div className="flex items-start justify-between gap-2">
+                      <h3 className="text-sm font-semibold leading-snug text-slate-800">{item.title}</h3>
+                      <DeadlineBadge deadline={item.deadline} />
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      {item.type && (
+                        <span className="inline-block rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                          {item.type}
+                        </span>
+                      )}
+                      {lock && (
+                        <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                          🔒 {lock.name} {lock.kind === 'admin' ? 'is editing' : 'is moving'}
+                        </span>
+                      )}
+                    </div>
                   </article>
                 )
               })}

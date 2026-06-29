@@ -29,7 +29,7 @@ export async function emitPresence(roster: PresentUser[]): Promise<void> {
   await realtime?.emit('board.presence', roster)
 }
 
-/** Broadcast the current set of board edit soft-locks to every open board. */
-export async function emitEditing(locks: BoardLock[]): Promise<void> {
-  await realtime?.emit('board.editing', locks)
+/** Broadcast the current set of drag-locks to every open board. */
+export async function emitLocks(locks: BoardLock[]): Promise<void> {
+  await realtime?.emit('board.locks', locks)
 }

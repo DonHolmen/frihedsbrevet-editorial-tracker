@@ -45,7 +45,7 @@ Everything below follows from that.
 | Dashboard: list grouped/filterable by status | ✅ Kanban columns by status | `KanbanBoard.tsx` |
 | Dashboard: shows creator + deadline | ⚠️ Partial — deadline on cards; creator in admin (see §3) | `KanbanBoard.tsx` / `/admin` |
 | Dashboard: form to create items | ⚠️ Via admin, not the board (see §3) | `/admin` |
-| Content view: publish / edit / archive | ✅ Publish via drag; inline title edit + lock on board; full edit/archive via admin | board + `/admin` |
+| Content view: publish / edit / archive | ✅ Publish via drag; edit/archive via admin; cards lock while dragged or open in admin | board + `/admin` |
 
 All core data and access requirements are met. The two ⚠️ items are conscious scope
 choices, explained in §3 — surfaced here rather than hidden.
@@ -92,14 +92,14 @@ choices, explained in §3 — surfaced here rather than hidden.
 - **Graceful degradation:** with no Upstash credentials the app runs fully — realtime simply
   no-ops and the board works locally. *Why:* a realtime outage must never break core CRUD or
   fail a write (the broadcast hook is best-effort).
-- **Editing soft-locks across two surfaces.** While someone edits a card inline on the board,
-  every other board shows a "🔒 [name] is editing" badge and the card can't be dragged or
-  edited. The lock is Redis-backed (so newcomers see in-progress edits), heartbeat-kept, and
-  released on save/cancel/disconnect, with a server-side conflict guard (409) so two people
-  can't grab the same card. It **also mirrors Payload's native admin document locks** — open an
-  item in `/admin` and it shows locked on the board too. *Why:* prevents silent clobbering;
-  *shows:* I can build one coherent lock across two independent systems (custom realtime +
-  Payload internals).
+- **Card locks across two surfaces.** A card can't be grabbed by two people at once: while
+  someone drags a card, every other board shows it 🔒 "[name] is moving" and disables dragging
+  (live over realtime, Redis-backed so newcomers see in-flight drags, with a server-side 409
+  conflict guard). The board **also mirrors Payload's native admin document locks** — when
+  someone opens a post in `/admin`, that card shows 🔒 "[name] is editing" on every board.
+  *Why:* prevents two people clobbering the same item; *shows:* I can build one coherent lock
+  spanning two independent systems (custom realtime drag-locks + Payload's internal
+  `payload-locked-documents`).
 
 ### Concurrency, UX & DX
 
@@ -123,18 +123,19 @@ These are conscious choices given the time-box — called out explicitly, as req
   and the same access rules. Rebuilding it on the board would duplicate that for little gain
   in a 3h slice. *Trade-off:* creation happens at `/admin`, one click from the board. A
   "+ New" inline composer on the board is the natural next step.
-- **Full edit view on the custom board.** The board now supports inline **title** editing
-  (with the soft-lock described in §2); editing the rich-text body and the other fields still
-  happens in the admin item view. *Why:* inline title covers the most common quick edit, while
-  a full field editor on the board would duplicate the admin form for little gain in this slice.
+- **Editing on the custom board.** The board is intentionally read-only except for status
+  (drag-to-move) — editing an item's title/body/fields happens in the admin item view. *Why:*
+  Payload's admin form already gives validated editing with the rich-text editor and the same
+  access rules; rebuilding it on the board would duplicate that for little gain in this slice.
+  (The board *does* surface a lock when an item is being edited in admin — see §2.)
 - **Creator name on board cards.** Cards show title, type, and deadline; the author/creator
   is visible in the admin list (`updatedBy` column) and item view but not yet on the card.
   Small, deliberate omission to keep the card clean; trivial to add.
 - **Character-level co-editing (CRDT).** True Google-Docs-style co-editing of the body via
   Yjs + a sync server was considered and **documented as a stretch goal, not built.** Instead
-  the build ships a *race-safe slice*: editing soft-locks on the board (§2) that also mirror
-  Payload's native document locking. *Why:* a correct CRDT setup is days, not hours, and out
-  of proportion to the brief.
+  the build ships a *race-safe slice*: drag-locks plus a live mirror of Payload's native
+  document locking (§2). *Why:* a correct CRDT setup is days, not hours, and out of proportion
+  to the brief.
 - **Docker.** Not included — SQLite makes the app zero-infra (`pnpm install && pnpm dev`), so
   Docker adds little for local review. A `Dockerfile` + compose is straightforward to add.
 - **Automated tests.** None in this slice. *Why:* time-boxed toward demonstrating breadth.
