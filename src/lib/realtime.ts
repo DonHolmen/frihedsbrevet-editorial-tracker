@@ -1,7 +1,7 @@
 import { Realtime } from '@upstash/realtime'
 
 import { redis } from './redis'
-import { boardSchema, type BoardItem, type PresentUser } from './realtime-schema'
+import { boardSchema, type BoardItem, type BoardLock, type PresentUser } from './realtime-schema'
 
 /**
  * Server-side realtime instance — Upstash Realtime (Redis Streams + SSE).
@@ -27,4 +27,9 @@ export async function emitDeleted(id: BoardItem['id']): Promise<void> {
 /** Broadcast the authoritative presence roster to every open board. */
 export async function emitPresence(roster: PresentUser[]): Promise<void> {
   await realtime?.emit('board.presence', roster)
+}
+
+/** Broadcast the current set of board edit soft-locks to every open board. */
+export async function emitEditing(locks: BoardLock[]): Promise<void> {
+  await realtime?.emit('board.editing', locks)
 }

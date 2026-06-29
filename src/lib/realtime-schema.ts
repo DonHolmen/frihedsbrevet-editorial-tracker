@@ -23,6 +23,8 @@ export const boardSchema = {
     deleted: z.object({ id }),
     /** Authoritative roster of everyone currently on the board. */
     presence: z.array(z.object({ id, name: z.string() })),
+    /** Items currently being edited on the board (soft-locks). */
+    editing: z.array(z.object({ itemId: id, by: z.object({ id, name: z.string() }) })),
   },
 }
 
@@ -30,3 +32,4 @@ export const boardSchema = {
 export type RealtimeEvents = typeof boardSchema
 export type BoardItem = z.infer<typeof boardSchema.board.item>
 export type PresentUser = z.infer<typeof boardSchema.board.presence>[number]
+export type BoardLock = z.infer<typeof boardSchema.board.editing>[number]

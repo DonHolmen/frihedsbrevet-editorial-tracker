@@ -80,6 +80,7 @@ board updates locally only. Emitted events are visible live in the Upstash conso
 | Realtime SDK (emit + schema + Redis) | `src/lib/realtime.ts`, `src/lib/realtime-schema.ts`, `src/lib/redis.ts` |
 | Realtime SSE route + presence | `src/app/realtime/route.ts`, `src/app/presence/route.ts`, `src/lib/presence.ts` |
 | Realtime broadcast hooks | `src/hooks/broadcastChange.ts` (afterChange + afterDelete) |
+| Edit locks (board soft-lock + admin mirror) | `src/app/editing/route.ts`, `src/lib/editing.ts` |
 | Board (Local API + RBAC) | `src/app/(frontend)/board/page.tsx`, `src/components/KanbanBoard.tsx` |
 | Deadlines at a glance | `src/components/DeadlineBadge.tsx` (+ optional `src/components/admin/DeadlineCell.tsx`) |
 | Seed | `src/seed/seed.ts` |
@@ -89,13 +90,17 @@ board updates locally only. Emitted events are visible live in the Upstash conso
 1. `pnpm seed`, then open `/board` logged in as **Clara** and **Erik** (two browsers).
 2. As Clara, drag *Budgetlækage* to **Published** → blocked with a 403 toast.
 3. As Erik, drag it to **Published** → succeeds and appears live on Clara's board.
-4. Note *Budgetlækage* shows a red **Overdue** badge.
-5. Open any item in `/admin` → see the `auditLog` array + `updatedBy`.
-6. As Erik, toggle `isArchived` on an item → it leaves the board for everyone.
+4. As Erik, click **✎ Edit** on a card → Clara instantly sees it 🔒 *"Erik is editing"* and
+   can't drag it; Erik saves a new title → it updates live and the lock clears.
+5. Open that same item in **/admin** → the board shows it 🔒 locked while it's open there too.
+6. Note *Budgetlækage* shows a red **Overdue** badge.
+7. Open any item in `/admin` → see the `auditLog` array + `updatedBy`.
+8. As Erik, toggle `isArchived` on an item → it leaves the board for everyone.
 
 ## Stretch goal (documented, not built)
 
-True character-level co-editing of the Lexical body via Yjs CRDT + a sync server
-(Hocuspocus / y-websocket) and the awareness protocol for live cursors. The current build
-ships a race-safe slice instead: Payload's native `lockDocuments` plus presence/soft-lock
-signaling over the same Upstash channel.
+True *character-level* co-editing of the Lexical body via Yjs CRDT + a sync server
+(Hocuspocus / y-websocket) with the awareness protocol for live cursors. The current build
+ships a race-safe slice instead: **editing soft-locks** on the board (a 🔒 indicator while a
+card is being edited, with live release) that also **mirror Payload's native `lockDocuments`**
+so a doc open in `/admin` shows locked on the board.
